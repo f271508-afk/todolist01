@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>看板待辦事項 (Google Sheet 雲端同步)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8fafc;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8;
+        }
+        .card-drag-over {
+            border: 2px dashed #3b82f6 !important;
+            background-color: #eff6ff !important;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-slate-800 flex flex-col justify-between">
+
+    <div class="max-w-7xl mx-auto px-4 py-8 w-full flex-grow">
+        <!-- Google Sheet Config Bar -->
+        <div class="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 mb-6 flex flex-col gap-3">
+            <div class="flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div class="flex items-center gap-2 text-xs sm:text-sm text-indigo-900 font-medium">
+                    <i class="fa-brands fa-google text-indigo-600 text-lg"></i>
+                    <span>Google Apps Script 雲端同步狀態：<span id="syncStatus" class="font-bold text-amber-600">使用本機記憶體（尚未設定網址）</span></span>
+                </div>
+                <div class="flex items-center gap-2 w-full sm:w-auto">
+                    <input type="text" id="scriptUrlInput" placeholder="請輸入 Google Apps Script 部署網址 (WebApp URL)" 
+                           class="bg-white border border-indigo-200 rounded-xl px-3 py-2 text-xs sm:text-sm w-full sm:w-80 focus:outline-none focus:ring-2 focus:ring-indigo-500/20">
+                    <button onclick="saveScriptUrl()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs sm:text-sm font-medium transition-all shrink-0">
+                        連線雲端
+                    </button>
+                    <button onclick="syncWithCloud()" id="syncBtn" class="bg-white hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition-all shrink-0 flex items-center gap-1.5" title="立即同步">
+                        <i class="fa-solid fa-rotate"></i>
+                    </button>
+                </div>
+            </div>
+            <!-- Error details debug banner -->
+            <div id="errorDetailsBox" class="hidden bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs text-rose-800 flex flex-col gap-1">
+                <div class="font-bold flex items-center gap-1">
+                    <i class="fa-solid fa-circle-exclamation"></i> 診斷提示與排錯建議：
+                </div>
+                <div id="errorDetailsText" class="font-mono text-[11px] leading-relaxed break-all"></div>
+                <div class="text-slate-600 text-[11px] mt-1">
+                    💡 排錯清單：1. 部署時「誰可以存取」必須選 **所有人 (Anyone)**。2. Apps Script 程式碼修改後，必須 **重新部署新版本 (New version)**。3. 試算表第一列需有表頭（id, title, desc, tag, status, order）。
+                </div>
+            </div>
+        </div>
+
+        <!-- Top Input Form Section -->
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-5 mb-6">
+            <div class="flex flex-col sm:flex-row gap-3 items-center">
+                <div class="relative flex-grow w-full">
+                    <input type="text" id="taskInput" placeholder="把要做的事寫下來，Enter 就放上看板..." 
+                           class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                </div>
+                <div class="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    <select id="taskTagSelect" class="bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                        <option value="待還開始">待還開始</option>
+                        <option value="今天到期">今天到期</option>
+                        <option value="10-24 到期">10-24 到期</option>
+                        <option value="重要">重要</option>
+                        <option value="不急">不急</option>
+                    </select>
+                    <button onclick="addNewTask()" class="bg-slate-800 hover:bg-slate-700 text-white px-6 py-3 rounded-xl text-sm font-medium transition-all shadow-sm flex items-center gap-2 shrink-0">
+                        <i class="fa-solid fa-plus"></i> 新增
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+            <div class="flex flex-wrap items-center gap-2" id="filterTabs">
+                <button onclick="setFilter('all')" class="filter-btn px-4 py-1.5 rounded-full text-sm font-medium bg-slate-900 text-white transition-all shadow-sm">全部</button>
+                <button onclick="setFilter('todo')" class="filter-btn px-4 py-1.5 rounded-full text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-all">待辦</button>
+                <button onclick="setFilter('doing')" class="filter-btn px-4 py-1.5 rounded-full text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-all">進行中</button>
+                <button onclick="setFilter('done')" class="filter-btn px-4 py-1.5 rounded-full text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-all">完成</button>
+            </div>
+
+            <div class="flex items-center gap-4 w-full md:w-auto justify-between md:justify-end">
+                <div class="text-xs sm:text-sm text-slate-500 font-medium" id="taskCounters">
+                    共 0 件 · 待辦 0 · 進行中 0 · 完成 0
+                </div>
+                <div class="relative w-48 sm:w-64">
+                    <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-slate-400">
+                        <i class="fa-solid fa-search text-xs"></i>
+                    </span>
+                    <input type="text" id="searchInput" oninput="renderBoard()" placeholder="搜尋..." 
+                           class="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-4 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all">
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Column 1: To Do -->
+            <div class="bg-slate-100/80 rounded-2xl p-4 flex flex-col border border-slate-200/60" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="dropTask(event, 'todo')">
+                <div class="flex justify-between items-center mb-4 px-2">
+                    <div class="flex items-center gap-2">
+                        <h3 class="font-bold text-slate-700 text-sm">待辦</h3>
+                        <span id="count-todo" class="bg-slate-200 text-slate-600 text-xs px-2 py-0.5 rounded-full font-semibold">0</span>
+                    </div>
+                    <span class="text-xs text-slate-400 font-medium">還沒開始</span>
+                </div>
+                <div id="column-todo" class="flex flex-col gap-3 flex-grow min-h-[250px]"></div>
+                <button onclick="openAddModal('todo')" class="mt-4 w-full py-2.5 border border-dashed border-slate-300 hover:border-slate-400 rounded-xl text-slate-500 hover:text-slate-700 text-sm font-medium transition-all bg-white/50 hover:bg-white flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-plus text-xs"></i> 新增一件事
+                </button>
+            </div>
+
+            <!-- Column 2: Doing -->
+            <div class="bg-slate-100/80 rounded-2xl p-4 flex flex-col border border-slate-200/60" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="dropTask(event, 'doing')">
+                <div class="flex justify-between items-center mb-4 px-2">
+                    <div class="flex items-center gap-2">
+                        <h3 class="font-bold text-slate-700 text-sm">進行中</h3>
+                        <span id="count-doing" class="bg-slate-200 text-slate-600 text-xs px-2 py-0.5 rounded-full font-semibold">0</span>
+                    </div>
+                    <span class="text-xs text-slate-400 font-medium">正在處理</span>
+                </div>
+                <div id="column-doing" class="flex flex-col gap-3 flex-grow min-h-[250px]"></div>
+                <button onclick="openAddModal('doing')" class="mt-4 w-full py-2.5 border border-dashed border-slate-300 hover:border-slate-400 rounded-xl text-slate-500 hover:text-slate-700 text-sm font-medium transition-all bg-white/50 hover:bg-white flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-plus text-xs"></i> 新增一件事
+                </button>
+            </div>
+
+            <!-- Column 3: Done -->
+            <div class="bg-slate-100/80 rounded-2xl p-4 flex flex-col border border-slate-200/60" ondragover="allowDrop(event)" ondragleave="removeDropStyle(event)" ondrop="dropTask(event, 'done')">
+                <div class="flex justify-between items-center mb-4 px-2">
+                    <div class="flex items-center gap-2">
+                        <h3 class="font-bold text-slate-700 text-sm">完成</h3>
+                        <span id="count-done" class="bg-slate-200 text-slate-600 text-xs px-2 py-0.5 rounded-full font-semibold">0</span>
+                    </div>
+                    <span class="text-xs text-slate-400 font-medium">已經做完</span>
+                </div>
+                <div id="column-done" class="flex flex-col gap-3 flex-grow min-h-[250px]"></div>
+                <button onclick="openAddModal('done')" class="mt-4 w-full py-2.5 border border-dashed border-slate-300 hover:border-slate-400 rounded-xl text-slate-500 hover:text-slate-700 text-sm font-medium transition-all bg-white/50 hover:bg-white flex items-center justify-center gap-1.5">
+                    <i class="fa-solid fa-plus text-xs"></i> 新增一件事
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Task Modal -->
+    <div id="taskModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm hidden items-center justify-center z-50 p-4">
+        <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6 border border-slate-100">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-slate-800">編輯待辦事項</h3>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-slate-600 p-1">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+            </div>
+            <input type="hidden" id="modalTaskId">
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">標題</label>
+                    <input type="text" id="modalTaskTitle" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">詳細內容 / 說明</label>
+                    <textarea id="modalTaskDesc" rows="4" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"></textarea>
+                </div>
+                <div class="flex gap-4">
+                    <div class="flex-1">
+                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">標籤狀態</label>
+                        <select id="modalTaskTag" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                            <option value="待還開始">待還開始</option>
+                            <option value="今天到期">今天到期</option>
+                            <option value="10-24 到期">10-24 到期</option>
+                            <option value="重要">重要</option>
+                            <option value="不急">不急</option>
+                        </select>
+                    </div>
+                    <div class="flex-1">
+                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">欄位位置</label>
+                        <select id="modalTaskStatus" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20">
+                            <option value="todo">待辦</option>
+                            <option value="doing">進行中</option>
+                            <option value="done">完成</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button onclick="closeModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-sm font-medium">取消</button>
+                <button onclick="saveModalTask()" class="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-sm font-medium shadow-sm">儲存變更</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let tasks = [
+            {
+                id: '1',
+                title: '《暢通電報》新一期審稿',
+                desc: '10月8日週四新稿會先給你看，你補個人經驗並說「可以發」...',
+                tag: '今天到期',
+                status: 'todo',
+                order: 0
+            }
+        ];
+
+        let currentFilter = 'all';
+        let scriptUrl = localStorage.getItem('kanban_gs_url') || '';
+
+        window.onload = function() {
+            if (scriptUrl) {
+                document.getElementById('scriptUrlInput').value = scriptUrl;
+                syncWithCloud();
+            } else {
+                renderBoard();
+            }
+
+            document.getElementById('taskInput').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    addNewTask();
+                }
+            });
+        };
+
+        function saveScriptUrl() {
+            const urlInput = document.getElementById('scriptUrlInput').value.trim();
+            scriptUrl = urlInput;
+            localStorage.setItem('kanban_gs_url', scriptUrl);
+            if (scriptUrl) {
+                syncWithCloud();
+            } else {
+                document.getElementById('syncStatus').innerText = '使用本機記憶體';
+                document.getElementById('syncStatus').className = 'font-bold text-amber-600';
+                document.getElementById('errorDetailsBox').classList.add('hidden');
+            }
+        }
+
+        async function syncWithCloud() {
+            if (!scriptUrl) {
+                renderBoard();
+                return;
+            }
+
+            const syncStatus = document.getElementById('syncStatus');
+            const errorBox = document.getElementById('errorDetailsBox');
+            const errorText = document.getElementById('errorDetailsText');
+            
+            syncStatus.innerText = '同步中...';
+            syncStatus.className = 'font-bold text-blue-600';
+            errorBox.classList.add('hidden');
+
+            try {
+                const response = await fetch(scriptUrl, {
+                    method: 'GET',
+                    redirect: 'follow'
+                });
+                if (!response.ok) {
+                    throw new Error(`HTTP 錯誤狀態碼: ${response.status} ${response.statusText}`);
+                }
+                const result = await response.json();
+                if (result && Array.isArray(result.tasks)) {
+                    tasks = result.tasks;
+                }
+                syncStatus.innerText = '已與 Google Sheet 同步';
+                syncStatus.className = 'font-bold text-emerald-600';
+            } catch (err) {
+                console.error(err);
+                syncStatus.innerText = '同步失敗（目前使用本機資料）';
+                syncStatus.className = 'font-bold text-rose-600';
+                errorText.innerText = err.toString();
+                errorBox.classList.remove('hidden');
+            }
+            renderBoard();
+        }
+
+        async function saveToCloud() {
+            if (!scriptUrl) return;
+            try {
+                await fetch(scriptUrl, {
+                    method: 'POST',
+                    redirect: 'follow',
+                    headers: {
+                        'Content-Type': 'text/plain;charset=utf-8'
+                    },
+                    body: JSON.stringify({ tasks: tasks })
+                });
+            } catch (e) {
+                console.error("Save to cloud error", e);
+            }
+        }
+
+        function setFilter(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.className = "filter-btn px-4 py-1.5 rounded-full text-sm font-medium bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 transition-all";
+            });
+            event.target.className = "filter-btn px-4 py-1.5 rounded-full text-sm font-medium bg-slate-900 text-white transition-all shadow-sm";
+            renderBoard();
+        }
+
+        function addNewTask(targetStatus = 'todo') {
+            const input = document.getElementById('taskInput');
+            const tagSelect = document.getElementById('taskTagSelect');
+            const title = input.value.trim();
+            
+            if (!title && targetStatus === 'todo') {
+                input.focus();
+                return;
+            }
+
+            const newTaskTitle = title || '新待辦事項';
+            const newTag = targetStatus === 'todo' ? tagSelect.value : '不急';
+
+            const columnTasks = tasks.filter(t => t.status === targetStatus);
+            const newTask = {
+                id: Date.now().toString(),
+                title: newTaskTitle,
+                desc: '',
+                tag: newTag,
+                status: targetStatus,
+                order: columnTasks.length
+            };
+
+            tasks.push(newTask);
+            input.value = '';
+            renderBoard();
+            saveToCloud();
+        }
+
+        function renderBoard() {
+            const searchQuery = document.getElementById('searchInput').value.toLowerCase();
+
+            const columns = {
+                todo: document.getElementById('column-todo'),
+                doing: document.getElementById('column-doing'),
+                done: document.getElementById('column-done')
+            };
+
+            Object.values(columns).forEach(col => col.innerHTML = '');
+
+            let counts = { todo: 0, doing: 0, done: 0 };
+            tasks.sort((a, b) => (a.order || 0) - (b.order || 0));
+
+            tasks.forEach(task => {
+                if (!counts[task.status]) counts[task.status] = 0;
+                counts[task.status]++;
+
+                if (currentFilter !== 'all' && task.status !== currentFilter) return;
+                if (searchQuery && !task.title.toLowerCase().includes(searchQuery) && !String(task.desc || '').toLowerCase().includes(searchQuery)) return;
+
+                const cardHTML = createTaskCardHTML(task);
+                if (columns[task.status]) {
+                    columns[task.status].insertAdjacentHTML('beforeend', cardHTML);
+                }
+            });
+
+            document.getElementById('taskCounters').innerText = `共 ${tasks.length} 件 · 待辦 ${counts.todo} · 進行中 ${counts.doing} · 完成 ${counts.done}`;
+            document.getElementById('count-todo').innerText = counts.todo;
+            document.getElementById('count-doing').innerText = counts.doing;
+            document.getElementById('count-done').innerText = counts.done;
+
+            Object.keys(columns).forEach(status => {
+                if (columns[status].children.length === 0) {
+                    columns[status].innerHTML = `
+                        <div class="text-center py-8 text-slate-400 text-xs italic bg-white/40 rounded-xl border border-dashed border-slate-200">
+                            這一欄是空的
+                        </div>
+                    `;
+                }
+            });
+        }
+
+        function getTagBadgeClass(tag) {
+            switch(tag) {
+                case '今天到期': return 'bg-amber-50 text-amber-700 border border-amber-200/60';
+                case '10-24 到期': return 'bg-amber-50 text-amber-700 border border-amber-200/60';
+                case '重要': return 'bg-rose-50 text-rose-700 border border-rose-200/60';
+                case '不急': return 'bg-slate-100 text-slate-600 border border-slate-200/60';
+                default: return 'bg-slate-100 text-slate-600 border border-slate-200/60';
+            }
+        }
+
+        function createTaskCardHTML(task) {
+            return `
+                <div draggable="true" ondragstart="drag(event, '${task.id}')" onclick="openModal('${task.id}')"
+                     class="bg-white rounded-xl p-4 shadow-sm border border-slate-200/80 hover:shadow-md transition-all cursor-pointer group relative flex flex-col gap-2">
+                    
+                    <div class="flex items-start justify-between gap-2">
+                        <div class="flex items-start gap-2.5">
+                            <span class="mt-1 w-4 h-4 rounded-full border border-slate-300 flex items-center justify-center shrink-0"></span>
+                            <h4 class="font-semibold text-slate-800 text-sm leading-snug">${escapeHtml(task.title)}</h4>
+                        </div>
+                    </div>
+
+                    ${task.desc ? `<p class="text-xs text-slate-500 line-clamp-2 pl-6">${escapeHtml(task.desc)}</p>` : ''}
+
+                    <div class="flex items-center justify-between pt-2 pl-6 mt-1 border-t border-slate-100">
+                        <span class="text-[11px] px-2 py-0.5 rounded-md font-medium ${getTagBadgeClass(task.tag)}">${escapeHtml(task.tag)}</span>
+                        
+                        <div class="flex items-center gap-1 text-slate-400 text-xs" onclick="event.stopPropagation()">
+                            <button onclick="moveTaskOrder('${task.id}', 'up')" title="向上" class="hover:text-slate-700 px-1 py-0.5"><i class="fa-solid fa-arrow-up"></i></button>
+                            <button onclick="moveTaskOrder('${task.id}', 'down')" title="向下" class="hover:text-slate-700 px-1 py-0.5"><i class="fa-solid fa-arrow-down"></i></button>
+                            <button onclick="shiftTaskColumn('${task.id}', 'left')" title="前一欄" class="hover:text-slate-700 px-1 py-0.5"><i class="fa-solid fa-arrow-left"></i></button>
+                            <button onclick="shiftTaskColumn('${task.id}', 'right')" title="後一欄" class="hover:text-slate-700 px-1 py-0.5"><i class="fa-solid fa-arrow-right"></i></button>
+                            <button onclick="deleteTask('${task.id}')" title="刪除" class="hover:text-rose-600 px-1 py-0.5 ml-1"><i class="fa-solid fa-xmark"></i></button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function drag(ev, taskId) { ev.dataTransfer.setData("text/plain", taskId); }
+        function allowDrop(ev) { ev.preventDefault(); ev.currentTarget.classList.add('card-drag-over'); }
+        function removeDropStyle(ev) { ev.currentTarget.classList.remove('card-drag-over'); }
+        function dropTask(ev, targetStatus) {
+            ev.preventDefault();
+            ev.currentTarget.classList.remove('card-drag-over');
+            const taskId = ev.dataTransfer.getData("text/plain");
+            const task = tasks.find(t => t.id === taskId);
+            if (task) {
+                task.status = targetStatus;
+                task.order = tasks.filter(t => t.status === targetStatus).length;
+                renderBoard();
+                saveToCloud();
+            }
+        }
+
+        function shiftTaskColumn(taskId, direction) {
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) return;
+            const statuses = ['todo', 'doing', 'done'];
+            const idx = statuses.indexOf(task.status);
+            if (direction === 'left' && idx > 0) task.status = statuses[idx - 1];
+            else if (direction === 'right' && idx < statuses.length - 1) task.status = statuses[idx + 1];
+            task.order = tasks.filter(t => t.status === task.status && t.id !== task.id).length;
+            renderBoard();
+            saveToCloud();
+        }
+
+        function moveTaskOrder(taskId, direction) {
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) return;
+            const colTasks = tasks.filter(t => t.status === task.status).sort((a, b) => (a.order || 0) - (b.order || 0));
+            const idx = colTasks.findIndex(t => t.id === taskId);
+            if (direction === 'up' && idx > 0) {
+                let tmp = colTasks[idx].order;
+                colTasks[idx].order = colTasks[idx - 1].order;
+                colTasks[idx - 1].order = tmp;
+            } else if (direction === 'down' && idx < colTasks.length - 1) {
+                let tmp = colTasks[idx].order;
+                colTasks[idx].order = colTasks[idx + 1].order;
+                colTasks[idx + 1].order = tmp;
+            }
+            renderBoard();
+            saveToCloud();
+        }
+
+        function deleteTask(taskId) {
+            tasks = tasks.filter(t => t.id !== taskId);
+            renderBoard();
+            saveToCloud();
+        }
+
+        function openModal(taskId) {
+            const task = tasks.find(t => t.id === taskId);
+            if (!task) return;
+            document.getElementById('modalTaskId').value = task.id;
+            document.getElementById('modalTaskTitle').value = task.title;
+            document.getElementById('modalTaskDesc').value = task.desc || '';
+            document.getElementById('modalTaskTag').value = task.tag;
+            document.getElementById('modalTaskStatus').value = task.status;
+            document.getElementById('taskModal').classList.remove('hidden');
+            document.getElementById('taskModal').classList.add('flex');
+        }
+
+        function closeModal() {
+            document.getElementById('taskModal').classList.remove('flex');
+            document.getElementById('taskModal').classList.add('hidden');
+        }
+
+        function saveModalTask() {
+            const id = document.getElementById('modalTaskId').value;
+            const task = tasks.find(t => t.id === id);
+            if (!task) return;
+            task.title = document.getElementById('modalTaskTitle').value.trim() || '未命名';
+            task.desc = document.getElementById('modalTaskDesc').value.trim();
+            task.tag = document.getElementById('modalTaskTag').value;
+            const newStatus = document.getElementById('modalTaskStatus').value;
+            if (task.status !== newStatus) {
+                task.status = newStatus;
+                task.order = tasks.filter(t => t.status === newStatus && t.id !== task.id).length;
+            }
+            closeModal();
+            renderBoard();
+            saveToCloud();
+        }
+
+        function openAddModal(status) {
+            const title = prompt("請輸入新待辦事項標題：");
+            if (title && title.trim()) {
+                tasks.push({
+                    id: Date.now().toString(),
+                    title: title.trim(),
+                    desc: '',
+                    tag: status === 'todo' ? '今天到期' : '不急',
+                    status: status,
+                    order: tasks.filter(t => t.status === status).length
+                });
+                renderBoard();
+                saveToCloud();
+            }
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+    </script>
+</body>
+</html>
